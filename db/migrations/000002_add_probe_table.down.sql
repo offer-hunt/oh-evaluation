@@ -1,0 +1,1 @@
+DROP TABLE IF EXISTS evaluation.__migration_probe;

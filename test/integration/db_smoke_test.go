@@ -6,6 +6,8 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -39,6 +41,41 @@ func isDockerAvailable(ctx context.Context) error {
 	return err
 }
 
+// resolveMigrationsPath пытается понять, где лежат миграции.
+// 1) MIGRATIONS_DIR из env
+// 2) ./db/migrations (если тесты запускают из корня)
+// 3) ../../db/migrations (если тесты запускают из test/integration)
+func resolveMigrationsPath(t *testing.T) string {
+	t.Helper()
+
+	candidates := []string{}
+
+	// 1. env
+	if envDir := os.Getenv("MIGRATIONS_DIR"); envDir != "" {
+		candidates = append(candidates, envDir)
+	}
+
+	// 2. относительные варианты
+	candidates = append(candidates,
+		"./db/migrations",
+		"../../db/migrations",
+	)
+
+	for _, c := range candidates {
+		if c == "" {
+			continue
+		}
+		if st, err := os.Stat(c); err == nil && st.IsDir() {
+			abs, err := filepath.Abs(c)
+			require.NoError(t, err)
+			return abs
+		}
+	}
+
+	t.Fatalf("не удалось найти каталог с миграциями; пробовал: %v", candidates)
+	return "" // до сюда не дойдём
+}
+
 func TestDbSmoke(t *testing.T) {
 	ctx := context.Background()
 
@@ -47,11 +84,6 @@ func TestDbSmoke(t *testing.T) {
 		t.Skipf("skipping DB smoke test: docker daemon is not available: %v", err)
 	}
 
-	// Поднимаем контейнер с ТЕМ ЖЕ именем БД и пользователем,
-	// под которые написаны миграции и docker-compose:
-	//   DB:   evaluation_db
-	//   USER: evaluation_user
-	//   PASS: evaluation_password
 	pgContainer, err := postgres.Run(ctx, "postgres:16-alpine",
 		postgres.WithDatabase("evaluation_db"),
 		postgres.WithUsername("evaluation_user"),
@@ -64,20 +96,23 @@ func TestDbSmoke(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	// останавливаем контейнер по завершении
 	defer func() {
 		if err := pgContainer.Terminate(ctx); err != nil {
 			log.Fatalf("failed to terminate container: %s", err)
 		}
 	}()
 
-	// получаем DSN к ЭТОЙ БД
 	connStr, err := pgContainer.ConnectionString(ctx, "sslmode=disable")
 	require.NoError(t, err)
 
-	// прогоняем миграции из ./db/migrations в поднятую БД
-	m, err := migrate.New("file://./db/migrations", connStr)
+	migrationsDir := resolveMigrationsPath(t)
+
+	// миграции должны быть в виде file://<abs>
+	sourceURL := "file://" + migrationsDir
+
+	m, err := migrate.New(sourceURL, connStr)
 	require.NoError(t, err)
+
 	err = m.Up()
 	require.NoError(t, err, "не удалось применить миграции")
 

@@ -17,11 +17,19 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: '1.24'
+          check-latest: true
+
+      # >>> ВАЖНО: сначала подтягиваем модули, чтобы typecheck у линтера видел зависимости
+      - name: Prime Go modules cache
+        run: |
+          go mod download
+          go mod verify
 
       - name: Run linter
         uses: golangci/golangci-lint-action@v6
         with:
-          version: v1.58
+          version: v1.61.0
+          args: --timeout=5m
 
       - name: Build
         run: go build -v ./...

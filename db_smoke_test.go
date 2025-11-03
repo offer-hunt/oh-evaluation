@@ -33,7 +33,6 @@ func isDockerAvailable(ctx context.Context) error {
 		}
 	}()
 
-	// v27: Ping возвращает types.Ping и ошибку.
 	_, err = cli.Ping(ctx)
 	return err
 }
@@ -41,44 +40,46 @@ func isDockerAvailable(ctx context.Context) error {
 func TestDbSmoke(t *testing.T) {
 	ctx := context.Background()
 
-	// Если Docker демона нет — пропускаем интеграционный тест, чтобы локально не падало.
+	// Если Docker демона нет — пропускаем интеграционный тест
 	if err := isDockerAvailable(ctx); err != nil {
 		t.Skipf("skipping DB smoke test: docker daemon is not available: %v", err)
 	}
 
-	// 1. Создание контейнера PostgreSQL для теста
-	// SA1019: postgres.RunContainer устарел — используем postgres.Run(ctx, image, ...)
+	// Поднимаем контейнер с ТЕМ ЖЕ именем БД и пользователем,
+	// под которые написаны миграции и docker-compose:
+	//   DB:   evaluation_db
+	//   USER: evaluation_user
+	//   PASS: evaluation_password
 	pgContainer, err := postgres.Run(ctx, "postgres:16-alpine",
-		postgres.WithDatabase("test_db"),
-		postgres.WithUsername("test_user"),
-		postgres.WithPassword("test_password"),
+		postgres.WithDatabase("evaluation_db"),
+		postgres.WithUsername("evaluation_user"),
+		postgres.WithPassword("evaluation_password"),
 		testcontainers.WithWaitStrategy(
 			wait.ForLog("database system is ready to accept connections").
 				WithOccurrence(2).
-				WithStartupTimeout(60*time.Second), // увеличенный таймаут для CI
+				WithStartupTimeout(60*time.Second),
 		),
 	)
 	require.NoError(t, err)
 
-	// Обязательно останавливаем контейнер после теста
+	// останавливаем контейнер по завершении
 	defer func() {
 		if err := pgContainer.Terminate(ctx); err != nil {
 			log.Fatalf("failed to terminate container: %s", err)
 		}
 	}()
 
-	// 2. Получение строки подключения к тестовой БД
+	// получаем DSN к ЭТОЙ БД
 	connStr, err := pgContainer.ConnectionString(ctx, "sslmode=disable")
 	require.NoError(t, err)
 
-	// 3. Применение миграций на тестовую БД
+	// прогоняем миграции из ./db/migrations в поднятую БД
 	m, err := migrate.New("file://./db/migrations", connStr)
 	require.NoError(t, err)
 	err = m.Up()
 	require.NoError(t, err, "не удалось применить миграции")
 
-	// 4. Подключение к тестовой БД и проверка
-	// Важно: добавляем search_path, чтобы запросы шли в нужную схему
+	// подключаемся через pgxpool с нужным search_path
 	poolConfig, err := pgxpool.ParseConfig(connStr + "&search_path=evaluation")
 	require.NoError(t, err)
 
@@ -89,8 +90,8 @@ func TestDbSmoke(t *testing.T) {
 	t.Run("проверка создания схемы и таблицы", func(t *testing.T) {
 		var count int
 		query := `
-			SELECT count(*) 
-			FROM information_schema.tables 
+			SELECT count(*)
+			FROM information_schema.tables
 			WHERE table_schema = 'evaluation' AND table_name = '__migration_probe'
 		`
 		err := pool.QueryRow(ctx, query).Scan(&count)

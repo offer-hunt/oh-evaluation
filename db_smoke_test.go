@@ -27,7 +27,11 @@ func isDockerAvailable(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer cli.Close()
+	defer func() {
+		if cerr := cli.Close(); cerr != nil {
+			log.Printf("failed to close docker client: %v", cerr)
+		}
+	}()
 
 	// v27: Ping возвращает types.Ping и ошибку.
 	_, err = cli.Ping(ctx)
@@ -43,8 +47,8 @@ func TestDbSmoke(t *testing.T) {
 	}
 
 	// 1. Создание контейнера PostgreSQL для теста
-	pgContainer, err := postgres.RunContainer(ctx,
-		testcontainers.WithImage("postgres:16-alpine"),
+	// SA1019: postgres.RunContainer устарел — используем postgres.Run(ctx, image, ...)
+	pgContainer, err := postgres.Run(ctx, "postgres:16-alpine",
 		postgres.WithDatabase("test_db"),
 		postgres.WithUsername("test_user"),
 		postgres.WithPassword("test_password"),
@@ -55,6 +59,7 @@ func TestDbSmoke(t *testing.T) {
 		),
 	)
 	require.NoError(t, err)
+
 	// Обязательно останавливаем контейнер после теста
 	defer func() {
 		if err := pgContainer.Terminate(ctx); err != nil {

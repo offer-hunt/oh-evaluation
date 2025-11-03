@@ -20,7 +20,9 @@ func TestSecurity(t *testing.T) {
 
 	jwksServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(jwksJSON))
+		if _, err := w.Write([]byte(jwksJSON)); err != nil {
+			t.Fatalf("failed to write JWKS response: %v", err)
+		}
 	}))
 	defer jwksServer.Close()
 
@@ -37,7 +39,9 @@ func TestSecurity(t *testing.T) {
 	// 3. Создаем тестовый хендлер, до которого дойдет запрос, если все middleware пройдут
 	testHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		if err := json.NewEncoder(w).Encode(map[string]string{"status": "ok"}); err != nil {
+			t.Fatalf("failed to write test handler response: %v", err)
+		}
 	})
 
 	// Собираем полный обработчик с middleware

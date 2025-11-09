@@ -1,0 +1,75 @@
+name: Go CI
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          check-latest: true
+
+      # базовые зависимости
+      - name: Prime Go modules cache
+        run: |
+          go mod download
+          go mod verify
+
+      - name: Run linter
+        uses: golangci/golangci-lint-action@v8
+        with:
+          version: v2.6.0
+          args: --modules-download-mode=mod --timeout=5m
+
+      - name: Build
+        run: go build -v ./...
+
+      # юнит-тесты
+      - name: Run unit tests
+        run: go test -v -race ./...
+
+      # отдельно подтянем зависимости для интеграционных тестов
+      # (то, что живёт в test/integration и не требуется прод коду)
+      - name: Prepare integration test deps
+        run: |
+          go get -t ./test/integration
+          go mod tidy
+
+      # интеграционные тесты
+      - name: Run integration tests
+        env:
+          TESTCONTAINERS_RYUK_DISABLED: "false"
+          MIGRATIONS_DIR: ${{ github.workspace }}/db/migrations
+        run: go test -v -race ./test/integration -tags=integration
+
+      - name: Get short Git SHA
+        id: git-sha
+        run: echo "sha=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+
+      - name: Login to Docker Hub
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push Docker image
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: |
+            offerhunt/evaluation-service:${{ steps.git-sha.outputs.sha }}
+            offerhunt/evaluation-service:latest
